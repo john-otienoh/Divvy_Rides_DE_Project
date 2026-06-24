@@ -1,0 +1,7 @@
+version: "3.12.3" 
+services:
+  run:
+    build: .
+    volumes:
+      - .:/app
+    command: python3 main.py
