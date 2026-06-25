@@ -6,21 +6,17 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 import requests
-from bs4 import BeautifulSoup
-import duckdb  
-import sqlite3 
+import duckdb
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from config import DB_PATH, SCRAPER_LOG_DIR
 
 # Configuration
-BASE_URL = "https://divvy-tripdata.s3.amazonaws.com/"
-DB_TYPE = "sqlite"          
-DB_PATH = "divvy_files.db"  
-LOG_DIR = Path("logs")
-LOG_FILE = LOG_DIR / "scrape.log"
+BASE_URL = "https://divvy-tripdata.s3.amazonaws.com/"          
 
 # Size constants matching the original JavaScript logic (SI units)
 KB = 1024
@@ -32,15 +28,19 @@ EXT_PATTERN = re.compile(r'\.([a-zA-Z0-9]{1,10})$')
 
 # Logging
 def setup_logging():
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+    # Console handler
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+
+    # File handler – now writes to the central logs/scraper/
+    fh = logging.FileHandler(SCRAPER_LOG_DIR / "scrape.log", encoding='utf-8')
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
 
 # Friendly size 
 def friendly_size(size_bytes: int) -> str:
@@ -97,7 +97,7 @@ def fetch_file_list(url: str) -> List[Dict]:
 
 # Database helpers
 def init_duckdb(db_path: str):
-    conn = duckdb.connect(db_path)
+    conn = duckdb.connect(str(DB_PATH))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS files (
             name VARCHAR,
@@ -121,32 +121,6 @@ def insert_duckdb(conn, files: List[Dict]):
               f['size_friendly'], f['type']))
     logging.info(f"Inserted {len(files)} rows into DuckDB")
 
-def init_sqlite(db_path: str):
-    conn = sqlite3.connect(db_path)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS files (
-            name TEXT,
-            url TEXT,
-            last_modified TEXT,
-            size_bytes INTEGER,
-            size_friendly TEXT,
-            type TEXT,
-            scraped_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    return conn
-
-def insert_sqlite(conn, files: List[Dict]):
-    conn.execute("DELETE FROM files")
-    for f in files:
-        conn.execute("""
-            INSERT INTO files (name, url, last_modified, size_bytes, size_friendly, type)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (f['name'], f['url'], f['last_modified'], f['size_bytes'],
-              f['size_friendly'], f['type']))
-    conn.commit()
-    logging.info(f"Inserted {len(files)} rows into SQLite")
-
 def main():
     setup_logging()
     logging.info("Starting Divvy S3 scraper (XML API)")
@@ -157,19 +131,10 @@ def main():
         logging.error(f"Failed to fetch/parse S3 listing: {e}")
         sys.exit(1)
 
-    if DB_TYPE.lower() == 'duckdb':
-        conn = init_duckdb(DB_PATH)
-        insert_duckdb(conn, files)
-        cnt = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-        conn.close()
-    elif DB_TYPE.lower() == 'sqlite':
-        conn = init_sqlite(DB_PATH)
-        insert_sqlite(conn, files)
-        cnt = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-        conn.close()
-    else:
-        logging.error(f"Unknown DB_TYPE: {DB_TYPE}")
-        sys.exit(1)
+    conn = init_duckdb(DB_PATH)
+    insert_duckdb(conn, files)
+    cnt = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    conn.close()
 
     logging.info(f"Done. {cnt} files stored in {DB_PATH}")
 

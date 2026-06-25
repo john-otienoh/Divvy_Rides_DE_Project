@@ -1,0 +1,87 @@
+"""
+Load monthly Divvy CSV files into DuckDB using chunked pandas.
+"""
+
+import time
+from pathlib import Path
+import pandas as pd
+import duckdb
+from storage.database import get_connection, create_all
+
+# Data type map ensures consistent schema & fast parsing
+DTYPE_MAP = {
+    "ride_id": "string",
+    "rideable_type": "string",
+    "start_station_name": "string",
+    "start_station_id": "string",
+    "end_station_name": "string",
+    "end_station_id": "string",
+    "member_casual": "string",
+    "start_lat": "float64",
+    "start_lng": "float64",
+    "end_lat": "float64",
+    "end_lng": "float64",
+}
+PARSE_DATES = ["started_at", "ended_at"]
+
+CHUNK_SIZE = 100_000          # rows per chunk (adjust to memory)
+DOWNLOADS_DIR = Path("downloads")
+
+def load_csv_to_duckdb(csv_path: Path, conn: duckdb.DuckDBPyConnection) -> int:
+    """
+    Read a CSV file in chunks and bulk-insert into raw_rides.
+    Returns total rows loaded.
+    """
+    total_rows = 0
+    try:
+        reader = pd.read_csv(
+            csv_path,
+            dtype=DTYPE_MAP,
+            parse_dates=PARSE_DATES,
+            chunksize=CHUNK_SIZE,
+            encoding="utf-8",
+        )
+
+        for chunk in reader:
+            # Insert chunk directly from DataFrame
+            conn.register("chunk_df", chunk)
+            conn.execute("INSERT OR IGNORE INTO raw_rides SELECT * FROM chunk_df")
+            conn.unregister("chunk_df")
+            total_rows += len(chunk)
+
+    except Exception as e:
+        print(f"Error loading {csv_path.name}: {e}")
+        return 0
+
+    return total_rows
+
+def main():
+    # Setup database
+    conn = get_connection()
+    create_all(conn)
+
+    # Collect CSV files (skip macOS resource forks)
+    csv_files = sorted(DOWNLOADS_DIR.glob("*.csv"))
+    csv_files = [f for f in csv_files if not f.name.startswith("._")]
+
+    for csv_file in csv_files:
+        start = time.time()
+        print(f"Loading {csv_file.name} ...", end=" ")
+        rows = load_csv_to_duckdb(csv_file, conn)
+        elapsed = time.time() - start
+
+        # Log to ingestion_log
+        conn.execute(
+            "INSERT INTO ingestion_log (file_name, rows_loaded, started_at, finished_at, status) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'success')",
+            [csv_file.name, rows],
+        )
+        print(f"{rows} rows in {elapsed:.2f}s")
+
+    # Print summary
+    total = conn.execute("SELECT COUNT(*) FROM raw_rides").fetchone()[0]
+    print(f"\nTotal rows in raw_rides: {total}")
+    conn.close()
+
+if __name__ == "__main__":
+    main()

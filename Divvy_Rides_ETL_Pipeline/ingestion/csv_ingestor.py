@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download Divvy tripdata ZIPs using a thread pool."""
+"""Download Divvy tripdata ZIPs using a thread pool – centralised config."""
 
 import logging
 import sys
@@ -8,19 +8,19 @@ from pathlib import Path
 from urllib.parse import urlparse
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-#  Configuration 
-DOWNLOAD_DIR = Path("downloads")
-LOG_DIR = Path("logs")
-LOG_FILE = LOG_DIR / "download.log"
+from config import DOWNLOADS_DIR, LOG_DIR, DOWNLOAD_LOG_FILE
+
+# Configuration
 REQUEST_TIMEOUT = 30
 CHUNK_SIZE = 8192
 MAX_RETRIES = 3
 BACKOFF_FACTOR = 0.5
-MAX_WORKERS = 5 
+MAX_WORKERS = 5
 
 URLS = [
     "https://divvy-tripdata.s3.amazonaws.com/202605-divvy-tripdata.zip",
@@ -35,24 +35,26 @@ URLS = [
     "https://divvy-tripdata.s3.amazonaws.com/202508-divvy-tripdata.zip",
 ]
 
-#  Logging 
+# Logging
 def setup_logging():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    fmt = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
 
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
     logger.addHandler(ch)
 
-    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    fh = logging.FileHandler(DOWNLOAD_LOG_FILE, encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-#  URL validation 
+# URL validation
 def create_retry_session() -> requests.Session:
     session = requests.Session()
     retry_strategy = Retry(
@@ -81,8 +83,7 @@ def check_url_validity(url: str) -> bool:
             logging.warning(f"Unreachable: {url} ({e})")
             return False
 
-
-#  Download 
+# Download
 def download_file(url: str, dest: Path) -> bool:
     """Download a file with streaming, retries, and cleanup on failure."""
     session = create_retry_session()
@@ -102,7 +103,7 @@ def download_file(url: str, dest: Path) -> bool:
             dest.unlink()
         return False
 
-#  Extraction 
+# Extraction
 def extract_csv_and_delete_zip(zip_path: Path, extract_to: Path) -> bool:
     """Extract all .csv files, then delete the ZIP."""
     csv_found = False
@@ -127,19 +128,19 @@ def extract_csv_and_delete_zip(zip_path: Path, extract_to: Path) -> bool:
             logging.error(f"Could not delete {zip_path}: {e}")
     return csv_found
 
-#  Single task for a thread 
+# Single task for a thread
 def process_one(url: str) -> bool:
     """Download + extract for a single URL."""
     filename = Path(urlparse(url).path).name
-    zip_path = DOWNLOAD_DIR / filename
+    zip_path = DOWNLOADS_DIR / filename
     if not download_file(url, zip_path):
         return False
-    return extract_csv_and_delete_zip(zip_path, DOWNLOAD_DIR)
+    return extract_csv_and_delete_zip(zip_path, DOWNLOADS_DIR)
 
-#  Main 
+# Main
 def main():
     setup_logging()
-    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)  
 
     # Validate URLs first
     logging.info("Validating URLs...")
@@ -166,4 +167,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

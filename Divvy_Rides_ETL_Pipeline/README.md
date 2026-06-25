@@ -1,8 +1,3 @@
-<!-- ============================================================ -->
-<!--          DIVVY RIDES ETL PIPELINE — PROJECT README           -->
-<!--     Junior Data Engineer Portfolio Project · Python 3.11     -->
-<!-- ============================================================ -->
-
 <div align="center">
 
 # 🚲 Divvy Rides ETL Pipeline
