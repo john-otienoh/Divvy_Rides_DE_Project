@@ -7,33 +7,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 import zipfile
+import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from config import DOWNLOADS_DIR, LOG_DIR, DOWNLOAD_LOG_FILE
+from config import DOWNLOADS_DIR, LOG_DIR, DOWNLOAD_LOG_FILE, DB_PATH
 
 # Configuration
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = 60
 CHUNK_SIZE = 8192
 MAX_RETRIES = 3
 BACKOFF_FACTOR = 0.5
 MAX_WORKERS = 5
-
-URLS = [
-    "https://divvy-tripdata.s3.amazonaws.com/202605-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202604-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202603-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202602-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202601-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202512-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202511-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202510-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202509-divvy-tripdata.zip",
-    "https://divvy-tripdata.s3.amazonaws.com/202508-divvy-tripdata.zip",
-]
 
 # Logging
 def setup_logging():
@@ -67,6 +55,22 @@ def create_retry_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
+
+def top_recent_file_urls(db_path: str, limit: int = 5) -> list[str]:
+    """
+    Return a list of download URLs for the most recently modified files.
+    """
+    conn = duckdb.connect(db_path, read_only=True)
+    try:
+        result = conn.execute("""
+            SELECT url
+            FROM files
+            ORDER BY last_modified DESC
+            LIMIT ?
+        """, [limit]).fetchall()
+        return [row[0] for row in result]
+    finally:
+        conn.close()
 
 def check_url_validity(url: str) -> bool:
     """Return True if a HEAD request succeeds (status < 400)."""
@@ -144,6 +148,7 @@ def main():
 
     # Validate URLs first
     logging.info("Validating URLs...")
+    URLS = top_recent_file_urls(db_path=str(DB_PATH))
     valid_urls = [url for url in URLS if check_url_validity(url)]
     logging.info(f"{len(valid_urls)}/{len(URLS)} URLs are valid.")
 
